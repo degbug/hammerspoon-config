@@ -18,7 +18,7 @@ local trackApp = {}
 local keyObj = {}
 
 -- 当前的chooser选项
-local currChoices = {}
+local currChoicesHolder = {}
 
 -- 上一次触发的应用名
 local lastCallAppName
@@ -28,6 +28,45 @@ local bindedSpecialApp = {}
 
 -- 已经初始化的应用
 local initedTable = {}
+
+local lastQueryTable = {}
+
+
+
+
+function pairsByKeys(t, f)
+    local a = {}
+    for k,v in pairs(t) do 
+        local n = {}
+        n.key = k
+        n.value = v
+        table.insert(a, n) 
+    end
+    table.sort(a, f)
+
+    print("a . count ")
+    print(getCount(a))
+    local i = 0                 -- iterator variable
+    local iter = function ()    -- iterator function
+       i = i + 1
+       if a[i] == nil then return nil
+       else return a[i].key, a[i].value
+       end
+    end
+    return iter
+end
+
+function sortFunc(a , b)
+    if a.value.order > b.value.order then 
+        return true
+    end
+end
+
+function sortFuncInverse(a , b)
+    if a.value.order < b.value.order then 
+        return true
+    end
+end
 
 
 -- 循环Value内容
@@ -94,26 +133,161 @@ local chooser = hs.chooser.new(function(choice)
     end
 end)
 
+function refreshChooser(appName)
+    local winInfo = getWinInfo(appName)
+    currChoicesHolder.currChoices = {}
+    if getCount(winInfo) == 0 then
+        table.insert(currChoicesHolder.currChoices, createItem(nil, appName))
+    else
+
+        for k1, v1 in pairsByKeys(winInfo, sortFuncInverse) do
+            print("refresh order "..v1.order)
+            table.insert(currChoicesHolder.currChoices,
+                            createItem(v1, appName))
+        end
+    end
+
+    chooser:choices(currChoicesHolder.currChoices)
+end
+
+-- 置底部
+function pushToEnd(_, item)
+    local winInfo = getWinInfo(item.appName)
+    local winId = item.id
+    local winObj = item.winObj
+    local reOrder = winObj.order
+    local max = 1
+    for k, v in  pairs(winInfo) do
+        if k ~= winId and v.order > max then
+            max = v.order
+        end
+    end
+
+
+    for k, v in pairs(winInfo) do
+        if k == winId then
+            print("pushEND the old order is "..tostring(v.order).." the new order is "..tostring(max))
+            v.order = max
+            print("reolder .. "..tostring(reOrder))
+        elseif v.order > reOrder then
+            v.order = v.order - 1
+        end
+    end
+
+    refreshChooser(item.appName)
+
+end
+
+-- 置顶
+function pushToTop(_, item)
+    local winInfo = getWinInfo(item.appName)
+    local winId = item.id
+    local winObj = item.winObj
+    local reOrder = winObj.order
+    for k, v in pairs(winInfo) do
+        if k == winId then
+            print("pushTOP: the old order is "..tostring(v.order).." the new order is "..tostring(1))
+            v.order = 1
+            print("reolder .. "..tostring(reOrder))
+        else 
+            if v.order < reOrder then
+                v.order = v.order + 1
+            end
+        end
+    end
+
+    refreshChooser(item.appName)
+
+end
+
+function renameWindow(_, item)
+    local winInfo = getWinInfo(item.appName)
+    local winId = item.id
+    local winObj = item.winObj
+    local reOrder = winObj.order
+    local btn, result = hs.dialog.textPrompt("重命名", "", getWinName(winObj.win), "确定", "取消")
+    print("btn"..btn)
+    print("resutl:"..result)
+    if btn == "确定" then
+        winInfo[winId].alterText = result
+    end
+
+    refreshChooser(item.appName)
+end
+
+function createMenuItem(winObj, operName, fn)
+
+    local item = {}
+    item.title = operName..tostring(winObj.order)..getWinName(winObj.win)
+    if winObj.alterText then
+        item.title = operName.."["..tostring(winObj.order).."]"..winObj.alterText
+    end
+    item.winObj = winObj
+    item.id = tostring(winObj.win:id())
+    item.appName = currChoicesHolder.appName
+    item.fn = fn
+
+    return item
+    -- body
+end
+
+
+
+chooser:rightClickCallback(function(row)
+
+    if currChoicesHolder.appName == anotherAppName then return end
+
+    local winInfo = getWinInfo(currChoicesHolder.appName)
+
+    local subMenuOfTop = {}
+    for k, winObj in pairsByKeys(winInfo, sortFunc) do
+        table.insert(subMenuOfTop, 1, createMenuItem(winObj, "置顶", pushToTop))
+    end
+
+    local subMenuOfEnd = {}
+    for k, winObj in pairsByKeys(winInfo, sortFunc) do
+        table.insert(subMenuOfEnd, 1, createMenuItem(winObj, "置底", pushToEnd))
+    end
+
+    local subMenuOfRename = {}
+    for k, winObj in pairsByKeys(winInfo, sortFunc) do
+        table.insert(subMenuOfRename, 1, createMenuItem(winObj, "重命名", renameWindow))
+    end
+
+    local menu = {{ title = "修改名称", menu=subMenuOfRename },
+                    {title = "-"},
+                    {title="置顶调整",menu=subMenuOfTop},
+                    {title="-"},
+                    {title="置底调整",menu=subMenuOfEnd}}
+    
+
+   local menubar = hs.menubar.new(false):setMenu(menu)
+
+   menubar:popupMenu(hs.mouse.getAbsolutePosition())
+end)
+
 -- 查询内容变更时回调事件
 -- 这里如果输入的是数字，则触发相应的行的快捷键
 -- 否则则更加输入的内容，进行过滤筛选
 chooser:queryChangedCallback(function(query)
     local queryNum = tonumber(query)
+    lastQueryTable[currChoicesHolder.appName] = nil
     if queryNum ~= nil and queryNum > 0 and #query == 1 then
         chooser:query(nil) -- 清空
         hs.eventtap.keyStroke({"cmd"}, query)
     elseif query then
         local finalChoices = {}
-        forValue(currChoices, function(v)
+        forValue(currChoicesHolder.currChoices, function(v)
             if string.find(string.lower(v.text), string.lower(query)) ~= nil then
                 table.insert(finalChoices, 1, v)
             end
         end)
-
+        
+        lastQueryTable[currChoicesHolder.appName] = query
         chooser:choices(finalChoices)
     else
         -- 为空
-        local finalChoices = currChoices
+        local finalChoices = currChoicesHolder.currChoices
         chooser:choices(finalChoices)
     end
 end)
@@ -135,28 +309,42 @@ hs.chooser.globalCallback = function(choose, name)
     if 'didClose' == name then enableHotKey() end
 end
 
-function createItem(win, appName, withAppName)
+
+
+function createItem(winObj, appName, withAppName)
     local item = {}
     local title = appName;
     local text = title;
     item.hasWin = false
-    if win ~= nil then
+    local winId = 0
+    if winObj ~= nil then
         item.hasWin = true
+        local win = winObj.win
         title = win:title();
+        winId = win:id()
         -- print("title:"..title)
-        if not title or title == "" then
+        if title == nil or title == "" then
             title = win:application():title()
         end
 
+        if title == nil then title = "未知标题" end
+
         text = string.gsub(title, "[\r\n]+", " ")
+        text = tostring(winObj.order)..text
         item.content = win:id()
+        item.order = winObj.order
+    end
+
+    if winObj and winObj.alterText then
+        text = winObj.alterText
     end
 
     if withAppName then
-        item.text = appName .. "->" .. text
+        item.text = appName .. "->" 
     else
         item.text = text
     end
+
 
     item.appName = appName
     return item
@@ -196,6 +384,7 @@ end
 -- 获取一个应用所有窗体信息
 function getWinInfo(appName)
     local bundleId = getBundleId(appName)
+    if bundleId == nil then return {} end
     local winInfo = appWinInfo[bundleId]
     if winInfo == nil then
         winInfo = {}
@@ -208,15 +397,35 @@ end
 -- 获取窗体
 function getWinById(winId, appName)
     local winInfo = getWinInfo(appName)
-    return winInfo[winId]
+    return winInfo[winId].win
+end
+
+function newWinObj(win)
+    return {win=win}
 end
 
 -- 添加记录一个窗体信息
 function addWinInfo(win)
+    print("add win info "..win:application():name())
     local winInfo = getWinInfo(win:application():title())
     local winId = getWinStringId(win)
     if winInfo[winId] == nil then
-        winInfo[winId] = win
+
+        local max = 0
+        if getCount(winInfo)>0 then
+            for k, v in pairs(winInfo) do
+                if v.order > max then max = v.order end
+            end
+        end
+
+        print(winId.." order = "..tostring(max))
+
+        local winObj = newWinObj(win)
+        winObj.order = max + 1
+
+        winInfo[winId] = winObj
+
+        print(tostring(getCount(winInfo)))
         return true
     end
 
@@ -239,28 +448,96 @@ end
 -- 获取应用信息
 function getApplication(name)
     local bundleId = getBundleId(name)
-    return hs.application.get(name)
+    if bundleId == nil then
+        print(name.."的bundleId is nil")
+        return hs.application.get(name)
+    end
+
+    return hs.application.get(bundleId)
 end
 
 -- 通过AppleScript获取bundleId
 function getBundleId(name)
     local source = 'tell application "' .. name ..
                        '" \nset wins to id \nend tell \nreturn wins'
+    -- print(source)
     local _, bundleId, _ = hs.osascript._osascript(source, "AppleScript")
+    -- print(name.." bundleId is : "..tostring(bundleId))
     return bundleId
 end
+
 
 function clearChooserQueryIfNeed(appName)
     if lastCallAppName ~= appName then chooser:query(nil) end
 
+    if(lastQueryTable[appName] ~= nil and #lastQueryTable[appName]>0) then
+        chooser:query(lastQueryTable[appName])
+    end
+
     lastCallAppName = appName
+end
+
+local initWins = {}
+
+function initAllWins()
+    print(#initWins)
+    if getCount(initWins) > 0 then return end
+
+    -- local source = "do shell script \" cd /Users/xmly/Library/Developer/Xcode/DerivedData/EnumWindows-ggzhchyvlumuwkegrdltoymsovkk/Build/Products/Debug/; ./EnumWindows --search=''\""
+    -- local _, CodeStr, Csss = hs.osascript._osascript(source, "AppleScript")
+    -- -- print(CodeStr)
+    
+    -- local tb = hs.json.decode(CodeStr)
+    -- for k, v in pairs(tb) do
+    --     -- if v["processName"] == "Code" then
+    --     --     print("发现一个CODE"..v["wid"])
+    --     -- end
+    --     local app = hs.application.applicationForPID(v["pid"])
+    --     local bundleID = app:bundleID()
+    --     local tmp = initWins[bundleID]
+    --     if tmp == nil then
+    --         initWins[bundleID] = {}
+    --     end
+
+    --     tmp = initWins[bundleID]
+    --     local winId = tonumber(v["wid"])
+
+    --     local window = hs.window.get(winId)
+    --     table.insert(tmp,  window)
+
+    --     if v["processName"] == "Code" then
+    --         print("发现一个CODE,当前数量是"..(getCount(tmp)))
+    --     end
+    -- end
+
+    -- print("begin init")
+    local windowfilter = hs.window.filter
+    -- local inv_wf=windowfilter.new():setDefaultFilter{}
+    inv_wf = windowfilter.new():setAppFilter("Code", {visible=nil})
+    local wins = inv_wf:getWindows()
+    for k,v in pairs(wins) do
+        -- print("dddsdf")
+        print(v:application():name()..":"..v:title())
+        local bundleID = v:application():bundleID()
+        local tmp = initWins[bundleID]
+        if tmp == nil then
+            initWins[bundleID] = {}
+        end
+
+        tmp = initWins[bundleID]
+
+        table.insert(tmp, v )
+
+        print(bundleID.." currentCount:"..tostring(getCount(tmp)))
+    end
 end
 
 -- 初始化应用信息
 function initAppWinInfo(appName)
+    initAllWins();
     local app = getApplication(appName)
     if app ~= nil then
-        local wins = app:allWindows()
+        local wins = initWins[app:bundleID()]
         print(appName .. " has " .. tostring(getCount(wins)))
         forValue(wins, function(win)
             if isStandardWin(win) and addWinInfo(win) then
@@ -282,23 +559,28 @@ end
 
 -- appName用于get app用，而name用于launch用
 switcher.bindApp = function(hyper, key, appName)
+    print("开始初始化:"..appName)
     initAppWinInfo(appName)
     bindedSpecialApp[appName] = true
 
     local hotKeyObject = hk.bind(hyper, key, function()
         clearChooserQueryIfNeed(appName)
 
-        currChoices = {}
+        currChoicesHolder.currChoices = {}
+        currChoicesHolder.appName = appName
         local wins = getWinInfo(appName)
+        print("数量是"..tostring(getCount(wins)))
+        print(getCount(wins))
         if getCount(wins) <= 1 then
             lauchAndBindWindowWatcher(appName)
         else
             disableHotKey()
-            for k, v in pairs(wins) do
-                table.insert(currChoices, 1, createItem(v, appName))
+            for k, v in pairsByKeys(wins, sortFunc) do
+
+                table.insert(currChoicesHolder.currChoices, createItem(v, appName))
             end
             -- hs.alert.show(chooser == nil)@
-            chooser:choices(currChoices)
+            chooser:choices(currChoicesHolder.currChoices)
             chooser:show()
             print('show choices')
         end
@@ -327,7 +609,8 @@ switcher.bindHotKey = function(hyper, key)
     hk.bind(hyper, key, function()
         clearChooserQueryIfNeed(anotherAppName)
 
-        currChoices = {}
+        currChoicesHolder.currChoices = {}
+        currChoicesHolder.appName = anotherAppName
         print("trackAppSize:" .. tostring(getCount(trackApp)))
         disableHotKey()
         for i = 1, #trackApp do
@@ -335,17 +618,17 @@ switcher.bindHotKey = function(hyper, key)
             if switcher.showBindApp or not bindedSpecialApp[appName] then
                 local winInfo = getWinInfo(appName)
                 if getCount(winInfo) == 0 then
-                    table.insert(currChoices, 1, createItem(nil, appName))
+                    table.insert(currChoicesHolder.currChoices, createItem(nil, appName))
                 else
-                    for k1, v1 in pairs(winInfo) do
-                        table.insert(currChoices, 1,
+                    for k1, v1 in pairsByKeys(winInfo, sortFunc) do
+                        table.insert(currChoicesHolder.currChoices,
                                      createItem(v1, appName, true))
                     end
                 end
             end
         end
 
-        chooser:choices(history)
+        chooser:choices(currChoicesHolder.currChoices)
         chooser:show()
     end)
 end
