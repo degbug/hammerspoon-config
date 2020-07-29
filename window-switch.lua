@@ -31,9 +31,6 @@ local initedTable = {}
 
 local lastQueryTable = {}
 
-
-
-
 function pairsByKeys(t, f)
     local a = {}
     for k,v in pairs(t) do 
@@ -44,8 +41,6 @@ function pairsByKeys(t, f)
     end
     table.sort(a, f)
 
-    print("a . count ")
-    print(getCount(a))
     local i = 0                 -- iterator variable
     local iter = function ()    -- iterator function
        i = i + 1
@@ -68,7 +63,6 @@ function sortFuncInverse(a , b)
     end
 end
 
-
 -- 循环Value内容
 function forValue(myTable, processFun)
     if getCount(myTable) > 0 then
@@ -76,46 +70,12 @@ function forValue(myTable, processFun)
     end
 end
 
--- 窗口销毁事件处理
-local winDestroyEventHandler = function(win, event, watcher, winName)
-    -- print(winName .. " destroyed")
-    removeWinInfo(win)
-    watcher:stop()
-    watcher = nil
-end
 
--- 添加一个窗口移除的事件监控
-function addDestroyWatcher(win)
-    local winName = getWinName(win)
-    win:newWatcher(winDestroyEventHandler, winName):start(
-        {hs.uielement.watcher.elementDestroyed})
-    -- print("success add des event for " .. winName)
-end
-
--- 窗口新增或者移动事件
--- 这里之所以处理移动事件，是因为获取不到其他space中的窗体时，切换space时，可以发现这些窗体
--- 因此，如果初次加载时，如果有全屏或者其他space的窗体时，要切换下
-local winCreateOrMoveEventHandler = function(win, event, _, appName)
-    if isStandardWin(win) and addWinInfo(win) then
-        -- 添加成功
-        print(appName .. " create a new window")
-        addDestroyWatcher(win)
-    end
-end
-
--- 唤起并绑定窗口创建事件
-function lauchAndBindWindowWatcher(appName)
-    print("lauchAndBindWindowWatcher " .. appName)
+-- 唤起应用（单窗口时使用）
+function lauchApplication(appName)
+    print("lauchApplication " .. appName)
     local bundleId = getBundleId(appName)
     hs.application.launchOrFocusByBundleID(bundleId)
-    local lauchedApp = hs.application.get(bundleId)
-
-    if lauchedApp ~= nil then
-        lauchedApp:newWatcher(winCreateOrMoveEventHandler, appName):start(
-            {elWat.windowCreated, elWat.windowMoved})
-    else
-        print("找不到" .. bundleId)
-    end
 end
 
 -- 选择框
@@ -126,9 +86,18 @@ local chooser = hs.chooser.new(function(choice)
             if curWin:isVisible() == false then curWin:raise() end
 
             curWin:focus()
+
+            -- 鼠标移动到当前屏幕，当当前鼠标不在当前屏幕时
+            local winScreen = curWin:screen()
+            if(winScreen:id() ~= hs.mouse.getCurrentScreen():id()) then
+                print("设置鼠标位置")
+                local rec = winScreen:frame()
+                hs.mouse.setRelativePosition(hs.geometry(rec.w -200,rec.h/2), winScreen)
+             end
+           
         else
             local appName = choice.appName
-            lauchAndBindWindowWatcher(appName)
+            lauchApplication(appName)
         end
     end
 end)
@@ -311,7 +280,7 @@ end
 
 
 
-function createItem(winObj, appName, withAppName)
+function createItem(winObj, appName, withAppName, bundleId)
     local item = {}
     local title = appName;
     local text = title;
@@ -330,7 +299,7 @@ function createItem(winObj, appName, withAppName)
         if title == nil then title = "未知标题" end
 
         text = string.gsub(title, "[\r\n]+", " ")
-        text = tostring(winObj.order)..text
+        -- text = tostring(winObj.order)..text
         item.content = win:id()
         item.order = winObj.order
     end
@@ -340,13 +309,14 @@ function createItem(winObj, appName, withAppName)
     end
 
     if withAppName then
-        item.text = appName .. "->" 
+        item.text = appName .. "->" .. text
     else
         item.text = text
     end
 
 
     item.appName = appName
+    item.bundleId = bundleId
     return item
 end
 
@@ -381,14 +351,50 @@ function getWinName(win)
     return win:title()
 end
 
+function getWinInfoWithApp(app)
+    local winInfo = {}
+    if app == nil then
+        return winInfo;
+    end
+
+    local wins = app:allWindows()
+
+    local max = 0
+    for k,win in pairs(wins) do
+        
+        local winObj = newWinObj(win)
+        winObj.order = max
+        max = max + 1
+
+        local winId = getWinStringId(win)
+        winInfo[winId] = winObj
+
+    end
+
+    return winInfo
+end
+
 -- 获取一个应用所有窗体信息
 function getWinInfo(appName)
-    local bundleId = getBundleId(appName)
-    if bundleId == nil then return {} end
-    local winInfo = appWinInfo[bundleId]
-    if winInfo == nil then
-        winInfo = {}
-        appWinInfo[bundleId] = winInfo
+    local app = getApplication(appName)
+    local winInfo = {}
+    if app == nil then
+        return winInfo;
+    end
+
+    local wins = app:allWindows()
+
+    local max = 0
+    for k,win in pairs(wins) do
+        -- if win:isStandard() then
+            local winObj = newWinObj(win)
+            winObj.order = max
+            max = max + 1
+
+            local winId = getWinStringId(win)
+            winInfo[winId] = winObj
+        -- end
+
     end
 
     return winInfo
@@ -440,6 +446,7 @@ end
 
 -- 判断是否是标准窗体应用
 function isStandardWin(win)
+    print(win:isStandard())
     local isS = string.find(tostring(win), "hs.uielement") == nil and
                     win:isStandard()
     return isS
@@ -477,90 +484,16 @@ function clearChooserQueryIfNeed(appName)
     lastCallAppName = appName
 end
 
-local initWins = {}
+local specialKeyMap = {}
 
-function initAllWins()
-    print(#initWins)
-    if getCount(initWins) > 0 then return end
-
-    -- local source = "do shell script \" cd /Users/xmly/Library/Developer/Xcode/DerivedData/EnumWindows-ggzhchyvlumuwkegrdltoymsovkk/Build/Products/Debug/; ./EnumWindows --search=''\""
-    -- local _, CodeStr, Csss = hs.osascript._osascript(source, "AppleScript")
-    -- -- print(CodeStr)
-    
-    -- local tb = hs.json.decode(CodeStr)
-    -- for k, v in pairs(tb) do
-    --     -- if v["processName"] == "Code" then
-    --     --     print("发现一个CODE"..v["wid"])
-    --     -- end
-    --     local app = hs.application.applicationForPID(v["pid"])
-    --     local bundleID = app:bundleID()
-    --     local tmp = initWins[bundleID]
-    --     if tmp == nil then
-    --         initWins[bundleID] = {}
-    --     end
-
-    --     tmp = initWins[bundleID]
-    --     local winId = tonumber(v["wid"])
-
-    --     local window = hs.window.get(winId)
-    --     table.insert(tmp,  window)
-
-    --     if v["processName"] == "Code" then
-    --         print("发现一个CODE,当前数量是"..(getCount(tmp)))
-    --     end
-    -- end
-
-    -- print("begin init")
-    local windowfilter = hs.window.filter
-    -- local inv_wf=windowfilter.new():setDefaultFilter{}
-    inv_wf = windowfilter.new():setAppFilter("Code", {visible=nil})
-    local wins = inv_wf:getWindows()
-    for k,v in pairs(wins) do
-        -- print("dddsdf")
-        print(v:application():name()..":"..v:title())
-        local bundleID = v:application():bundleID()
-        local tmp = initWins[bundleID]
-        if tmp == nil then
-            initWins[bundleID] = {}
-        end
-
-        tmp = initWins[bundleID]
-
-        table.insert(tmp, v )
-
-        print(bundleID.." currentCount:"..tostring(getCount(tmp)))
-    end
+switcher.addSpecialKeyMap = function(appName, keyTable)
+    local bundleId = getBundleId(appName)
+    specialKeyMap[bundleId] = keyTable 
 end
 
--- 初始化应用信息
-function initAppWinInfo(appName)
-    initAllWins();
-    local app = getApplication(appName)
-    if app ~= nil then
-        local wins = initWins[app:bundleID()]
-        print(appName .. " has " .. tostring(getCount(wins)))
-        forValue(wins, function(win)
-            if isStandardWin(win) and addWinInfo(win) then
-                addDestroyWatcher(win)
-            end
-        end)
-
-        if not initedTable[appName] then
-            app:newWatcher(winCreateOrMoveEventHandler, appName):start(
-                {elWat.windowCreated, elWat.windowMoved})
-
-            initedTable[appName] = true
-        end
-
-    else
-        print("can not find app[" .. appName .. "]")
-    end
-end
 
 -- appName用于get app用，而name用于launch用
 switcher.bindApp = function(hyper, key, appName)
-    print("开始初始化:"..appName)
-    initAppWinInfo(appName)
     bindedSpecialApp[appName] = true
 
     local hotKeyObject = hk.bind(hyper, key, function()
@@ -572,17 +505,49 @@ switcher.bindApp = function(hyper, key, appName)
         print("数量是"..tostring(getCount(wins)))
         print(getCount(wins))
         if getCount(wins) <= 1 then
-            lauchAndBindWindowWatcher(appName)
-        else
-            disableHotKey()
-            for k, v in pairsByKeys(wins, sortFunc) do
-
-                table.insert(currChoicesHolder.currChoices, createItem(v, appName))
+            lauchApplication(appName)
+            
+            
+            if(getCount(wins) == 1) then
+                for k, win in pairs(wins) do
+                    local winScreen = win.win:screen()
+                    if(winScreen:id() ~= hs.mouse.getCurrentScreen():id()) then
+                        print("设置鼠标位置")
+                        local rec = winScreen:frame()
+                        hs.mouse.setRelativePosition(hs.geometry(rec.w -200,rec.h/2), winScreen)
+                    end
+                end
             end
-            -- hs.alert.show(chooser == nil)@
-            chooser:choices(currChoicesHolder.currChoices)
-            chooser:show()
-            print('show choices')
+        else
+            -- 处理独立查词窗口
+            local isShaLa = false
+            if appName == 'Microsoft Edge' and getCount(wins) == 2 then
+                local curWin
+                for k, v in pairsByKeys(wins, sortFunc) do
+                    local win = v.win
+                    if win:title() == '沙拉查词-独立查词窗口' then
+                        isShaLa = true
+                    else
+                        curWin = win
+                    end
+                end
+
+                if isShaLa == true then
+                    if curWin:isVisible() == false then curWin:raise() end
+                     curWin:focus()
+                end
+            end
+
+            if isShaLa == false then
+                disableHotKey()
+                for k, v in pairsByKeys(wins, sortFunc) do
+                    table.insert(currChoicesHolder.currChoices, createItem(v, appName))
+                end
+                -- hs.alert.show(chooser == nil)@
+                chooser:choices(currChoicesHolder.currChoices)
+                chooser:show()
+                print('show choices')
+            end
         end
     end)
 
@@ -596,41 +561,183 @@ end
 switcher.addTrackerApp = function(tmpTrackApp)
     for i = 1, #tmpTrackApp do
         trackApp[#trackApp + 1] = tmpTrackApp[i]
-        initAppWinInfo(tmpTrackApp[i])
     end
 end
 
 -- 下面的热键触发时，是否也展示已经绑定了特殊热键的的应用
 switcher.showBindApp = false
 
+local currenQueryId = 0
+
+function ContainChinese(str) 
+    local l = #string.gsub(str, "[^\128-\191]", "")
+    return (l ~= 0)
+end
+
+local historyApp = {}
+
+function showHistory(chooser)
+    local currChoices = {}
+    for appName, _ in pairs(historyApp) do
+      local app = getApplication(appName)
+        local winInfo = getWinInfoWithApp(app)
+        if getCount(winInfo) == 0 then
+            table.insert(currChoices, createItem(nil, appName, false, bundleId))
+        else
+            for k1, v1 in pairsByKeys(winInfo, sortFunc) do
+                -- if isStandardWin(v1) then
+                        table.insert(currChoices,
+                                createItem(v1, appName, true, bundleId))
+                -- end
+            end
+        end
+    end
+
+    chooser:choices(currChoices)
+end
+
+function search()
+-- 选择框
+    local chooser = hs.chooser.new(function(choice)
+        if choice then
+            historyApp[choice.appName] = 1
+            if choice.hasWin then
+                local curWin = getWinById(tostring(choice.content), choice.appName)
+                if curWin:isVisible() == false then curWin:raise() end
+                curWin:focus()
+            else
+                if choice.bundleId ~= nil then
+                    hs.application.launchOrFocusByBundleID(choice.bundleId)
+                else
+                    local appName = choice.appName
+                    lauchApplication(appName)
+                end
+            end
+        end
+    end)
+
+    -- 查询内容变更时回调事件
+    -- 这里如果输入的是数字，则触发相应的行的快捷键
+    -- 否则则更加输入的内容，进行过滤筛选
+    chooser:queryChangedCallback(function(query)
+        if query and #query>= 1 then
+            if #query <= 2 then
+                if ContainChinese(query) == false then
+                    chooser:choices({})
+                    return
+                end
+
+            end
+            currenQueryId = currenQueryId+1;
+            searchForChooser(chooser, currenQueryId, query)
+        else
+            showHistory(chooser)
+        end
+       
+    end)
+
+    showHistory(chooser)
+
+    chooser:show()
+    
+end
+
+function searchForChooser(chooser, queryIndex, query)
+    local spotlight = hs.spotlight.new()
+    print(type(spotlight))
+    spotlight:setCallback(function(obj, mes)
+        if(currenQueryId ~= queryIndex) then
+            print("取消当前操作"..queryIndex.."当前："..currenQueryId)
+            obj:stop()
+            return
+        end
+
+        if "didFinish" == mes then
+            -- print(obj:count())
+            print(obj:count())
+            if(obj:count()>0) then
+                local currChoices = {}
+                local repeatT = {}
+                for i=1, obj:count(), 1 do
+                    if(currenQueryId ~= queryIndex) then
+                        print("取消当前操作")
+                        obj:stop()
+                        return
+                    end
+
+                    local itemObj = obj:resultAtIndex(1)
+                    local bundleId = itemObj:valueForAttribute("kMDItemCFBundleIdentifier")
+                    local appName = itemObj:valueForAttribute("kMDItemDisplayName")
+                    if repeatT[bundleId] == nil then
+                        if switcher.showBindApp or not bindedSpecialApp[appName] then
+                            local app = hs.application.get(bundleId)
+                            local winInfo = getWinInfoWithApp(app)
+                            if getCount(winInfo) == 0 then
+                                table.insert(currChoices, createItem(nil, appName, false, bundleId))
+                            else
+                                for k1, v1 in pairsByKeys(winInfo, sortFunc) do
+                                    -- if isStandardWin(v1.win) then
+                                         table.insert(currChoices,
+                                                    createItem(v1, appName, true, bundleId))
+                                    -- end
+                                end
+                            end
+                        end
+                    end
+
+                    repeatT[bundleId] = 1
+                   
+                end
+                
+                if(currenQueryId ~= queryIndex) then
+                    print("取消当前操作")
+                    obj:stop()
+                    return
+                end
+
+                chooser:choices(currChoices)
+            end
+
+            obj:stop()
+        end
+    end)
+
+    spotlight:queryString([[ (kMDItemDisplayName like [c] "*]]..query..[[*" || kMDItemFSName like [c] "*]]..query..[[*") && kMDItemContentType == "com.apple.application-bundle" ]])
+    spotlight:start()
+end
+
 -- 绑定触发的热键
 switcher.bindHotKey = function(hyper, key)
     -- body
     hk.bind(hyper, key, function()
-        clearChooserQueryIfNeed(anotherAppName)
+        search()
+        -- clearChooserQueryIfNeed(anotherAppName)
 
-        currChoicesHolder.currChoices = {}
-        currChoicesHolder.appName = anotherAppName
-        print("trackAppSize:" .. tostring(getCount(trackApp)))
-        disableHotKey()
-        for i = 1, #trackApp do
-            local appName = trackApp[i]
-            if switcher.showBindApp or not bindedSpecialApp[appName] then
-                local winInfo = getWinInfo(appName)
-                if getCount(winInfo) == 0 then
-                    table.insert(currChoicesHolder.currChoices, createItem(nil, appName))
-                else
-                    for k1, v1 in pairsByKeys(winInfo, sortFunc) do
-                        table.insert(currChoicesHolder.currChoices,
-                                     createItem(v1, appName, true))
-                    end
-                end
-            end
-        end
+        -- currChoicesHolder.currChoices = {}
+        -- currChoicesHolder.appName = anotherAppName
+        -- print("trackAppSize:" .. tostring(getCount(trackApp)))
+        -- disableHotKey()
+        -- for i = 1, #trackApp do
+        --     local appName = trackApp[i]
+        --     if switcher.showBindApp or not bindedSpecialApp[appName] then
+        --         local winInfo = getWinInfo(appName)
+        --         if getCount(winInfo) == 0 then
+        --             table.insert(currChoicesHolder.currChoices, createItem(nil, appName))
+        --         else
+        --             for k1, v1 in pairsByKeys(winInfo, sortFunc) do
+        --                 table.insert(currChoicesHolder.currChoices,
+        --                              createItem(v1, appName, true))
+        --             end
+        --         end
+        --     end
+        -- end
 
-        chooser:choices(currChoicesHolder.currChoices)
-        chooser:show()
+        -- chooser:choices(currChoicesHolder.currChoices)
+        -- chooser:show()
     end)
 end
+
+
+
 
 return switcher
