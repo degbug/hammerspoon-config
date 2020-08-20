@@ -321,9 +321,12 @@ function createItem(winObj, appName, withAppName, bundleId)
 end
 
 function getBundleId(appName)
+    if appName == 'Royal TSX' then
+        return "com.lemonmojo.RoyalTSX.App"
+    end
     local bundleId = appInfo[appName]
     if bundleId == nil then
-        bundleId = getBundleId(appName)
+        bundleId = getBundleIdWithAppleScript(appName)
         appInfo[appName] = bundleId
     end
 
@@ -464,7 +467,7 @@ function getApplication(name)
 end
 
 -- 通过AppleScript获取bundleId
-function getBundleId(name)
+function getBundleIdWithAppleScript(name)
     local source = 'tell application "' .. name ..
                        '" \nset wins to id \nend tell \nreturn wins'
     -- print(source)
