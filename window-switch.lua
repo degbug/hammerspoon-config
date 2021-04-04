@@ -528,7 +528,7 @@ switcher.bindApp = function(hyper, key, appName)
                 local curWin
                 for k, v in pairsByKeys(wins, sortFunc) do
                     local win = v.win
-                    if win:title() == '沙拉查词-独立查词窗口' then
+                    if win:title() == '沙拉查词-独立查词窗口' or win:title() == '沙拉查词-独立查词窗口 - 睡眠' then
                         isShaLa = true
                     else
                         curWin = win
